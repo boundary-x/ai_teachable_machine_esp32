@@ -1,18 +1,23 @@
-// Bluetooth UUIDs for micro:bit UART service
+/**
+ * sketch.js
+ * Boundary X Teachable Machine Controller Logic (Square Crop Fixed - ESP32 Version)
+ */
+
+// Bluetooth UUIDs
 const UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-const UART_RX_CHARACTERISTIC_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-const UART_TX_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+const UART_TX_CHARACTERISTIC_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+const UART_RX_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
 let bluetoothDevice = null;
 let rxCharacteristic = null;
 let txCharacteristic = null;
 let isConnected = false;
-let bluetoothStatus = "Disconnected";
+let bluetoothStatus = "연결 대기 중";
 
 // Video and ML variables
 let video;
 let classifier = null;
-let label = "wait";
+let label = "대기 중";
 let isClassifying = false;
 
 // Camera control variables
@@ -23,40 +28,43 @@ let isVideoLoaded = false;
 // UI elements
 let modelInput, modelSelect, initializeModelButton, stopClassifyButton;
 let flipButton, switchCameraButton, connectBluetoothButton, disconnectBluetoothButton;
+let modelStatusDiv;
 
+// 모델 리스트
 const modelList = {
-  "✌🏻✊🏻🖐🏻 가위 바위 보 분류": "vOi4Y0yiK",
-  "🚗 속도 표지판 분류": "cTrp8ZF93",
-  "⬅️➡️ 방향 표지판 분류": "JX0oMMrn3"
+  "가위 바위 보 분류": "https://teachablemachine.withgoogle.com/models/vOi4Y0yiK/",
+  "속도 표지판 분류": "https://teachablemachine.withgoogle.com/models/cTrp8ZF93/",
+  "방향 표지판 분류": "https://teachablemachine.withgoogle.com/models/JX0oMMrn3/"
 };
 
 let isSendingData = false;
+let canvas; // Canvas 객체 저장용
 
 function setup() {
-  let canvas = createCanvas(400, 300);
+  // 400x400 정사각형 캔버스
+  canvas = createCanvas(400, 400);
   canvas.parent('p5-container');
-  canvas.style('border-radius', '20px');
   
-  // Setup video capture
   setupCamera();
-
-  // Create UI
   createUI();
 }
 
 function setupCamera() {
-  video = createCapture({
+  let constraints = {
     video: {
-      facingMode: facingMode,
-      width: 400,  
-      height: 300 
-    }
-  });
-  video.elt.onloadeddata = function() {
-    isVideoLoaded = true;
-    resizeCanvasToFit(); 
+      facingMode: facingMode
+      // width, height를 강제하지 않음 (카메라 고유 비율 사용)
+    },
+    audio: false
   };
-  video.size(400, 300); 
+
+  video = createCapture(constraints);
+  
+  video.elt.onloadeddata = function() {
+    console.log("Video metadata loaded");
+  };
+
+  // [수정] video.size() 강제 설정을 제거하여 원본 비율 유지
   video.hide();
 
   let videoLoadCheck = setInterval(() => {
@@ -64,105 +72,79 @@ function setupCamera() {
       clearInterval(videoLoadCheck);
       return;
     }
-    if (video.elt.videoWidth && video.elt.videoHeight) {
+    // 데이터가 들어오기 시작하면 로드 완료
+    if (video.elt.readyState >= 2 && video.width > 0) {
       isVideoLoaded = true;
       resizeCanvasToFit();
       clearInterval(videoLoadCheck);
+      console.log(`Video Stream Ready: ${video.width}x${video.height}`);
     }
   }, 100);
 }
 
+function stopVideo() {
+  if (video) {
+    if (video.elt.srcObject) {
+      const tracks = video.elt.srcObject.getTracks();
+      tracks.forEach(track => track.stop());
+    }
+    video.remove(); 
+    video = null;
+  }
+}
+
 function createUI() {
-  // Camera control buttons
-  flipButton = createButton("↔️ 카메라 좌우 반전");
+  flipButton = createButton("좌우 반전");
   flipButton.parent('camera-control-buttons');
-  flipButton.style('background', '#78B3FF');
-  flipButton.style('color', 'white');
-  flipButton.style('border-radius', '12px');
-  flipButton.style('padding', '0.8rem');
-  flipButton.style('font-size', '1rem');
-  flipButton.style('cursor', 'pointer');
+  flipButton.addClass('start-button');
   flipButton.mousePressed(toggleFlip);
 
-  switchCameraButton = createButton("🔄 전후방 카메라 전환");
+  switchCameraButton = createButton("전후방 전환");
   switchCameraButton.parent('camera-control-buttons');
-  switchCameraButton.style('background', '#78B3FF');
-  switchCameraButton.style('color', 'white');
-  switchCameraButton.style('border-radius', '12px');
-  switchCameraButton.style('padding', '0.8rem');
-  switchCameraButton.style('font-size', '1rem');
-  switchCameraButton.style('cursor', 'pointer');
+  switchCameraButton.addClass('start-button');
   switchCameraButton.mousePressed(switchCamera);
 
-  // Bluetooth control buttons
-  connectBluetoothButton = createButton("🔗 블루투스 연결");
+  connectBluetoothButton = createButton("기기 연결");
   connectBluetoothButton.parent('bluetooth-control-buttons');
-  connectBluetoothButton.style('background', '#78B3FF');
-  connectBluetoothButton.style('color', 'white');
-  connectBluetoothButton.style('border-radius', '12px');
-  connectBluetoothButton.style('padding', '0.8rem');
-  connectBluetoothButton.style('font-size', '1rem');
-  connectBluetoothButton.style('cursor', 'pointer');
+  connectBluetoothButton.addClass('start-button');
   connectBluetoothButton.mousePressed(connectBluetooth);
 
-  disconnectBluetoothButton = createButton("❌ 블루투스 연결 해제");
+  disconnectBluetoothButton = createButton("연결 해제");
   disconnectBluetoothButton.parent('bluetooth-control-buttons');
-  disconnectBluetoothButton.style('background', '#78B3FF');
-  disconnectBluetoothButton.style('color', 'white');
-  disconnectBluetoothButton.style('border-radius', '12px');
-  disconnectBluetoothButton.style('padding', '0.8rem');
-  disconnectBluetoothButton.style('font-size', '1rem');
-  disconnectBluetoothButton.style('cursor', 'pointer');
+  disconnectBluetoothButton.addClass('stop-button');
   disconnectBluetoothButton.mousePressed(disconnectBluetooth);
 
-  // Model selection
   modelSelect = createSelect();
   modelSelect.parent('model-select-and-link');
-  modelSelect.option("모델을 선택하세요", "");
+  modelSelect.option("샘플 모델 선택 또는 직접 입력", "");
   for (const modelName in modelList) {
     modelSelect.option(modelName, modelList[modelName]);
   }
   modelSelect.changed(updateModelInput);
-  modelSelect.style('padding', '0.8rem');
-  modelSelect.style('border-radius', '12px');
-  modelSelect.style('background', '#ecf0f1');
-  modelSelect.style('color', '#2c3e50');
 
-  createA("https://boundaryx.io", "모델 분류 데이터 보기", "_blank")
+  createA("https://boundaryx.io", "데이터셋 및 설명 보기", "_blank")
     .parent('model-select-and-link')
-    .style("color", "#78B3FF");
+    .style("color", "#666").style("font-size", "0.9rem").style("display", "block").style("margin-top", "5px");
 
-  // Model key input
   modelInput = createInput('');
   modelInput.parent('model-key-container');
-  modelInput.style('padding', '0.8rem');
-  modelInput.style('border-radius', '12px');
-  modelInput.style('background', '#ecf0f1');
-  modelInput.style('border', '1px solid #ddd');
-  modelInput.style('color', '#2c3e50');
+  modelInput.attribute('placeholder', '모델 전체 주소 또는 짧은 ID 입력 (예: lSgKZj_c5)');
 
-  // Model action buttons
-  initializeModelButton = createButton('🟢 모델 로드');
+  modelStatusDiv = createDiv('모델을 로드해주세요.');
+  modelStatusDiv.parent('model-key-container');
+  modelStatusDiv.id('modelStatus');
+
+  initializeModelButton = createButton('모델 로드 시작');
   initializeModelButton.parent('model-action-buttons');
-  initializeModelButton.style('background', '#78B3FF');
-  initializeModelButton.style('color', 'white');
-  initializeModelButton.style('border-radius', '12px');
-  initializeModelButton.style('padding', '0.8rem');
-  initializeModelButton.style('font-size', '1rem');
-  initializeModelButton.style('cursor', 'pointer');
+  initializeModelButton.addClass('start-button');
   initializeModelButton.mousePressed(initializeModel);
 
-  stopClassifyButton = createButton('🔴 분류 중지');
+  stopClassifyButton = createButton('분류 중지');
   stopClassifyButton.parent('model-action-buttons');
-  stopClassifyButton.style('background', '#78B3FF');
-  stopClassifyButton.style('color', 'white');
-  stopClassifyButton.style('border-radius', '12px');
-  stopClassifyButton.style('padding', '0.8rem');
-  stopClassifyButton.style('font-size', '1rem');
-  stopClassifyButton.style('cursor', 'pointer');
+  stopClassifyButton.addClass('stop-button');
   stopClassifyButton.mousePressed(stopClassification);
 
-  updateBluetoothStatus();
+  updateBluetoothStatusUI();
 }
 
 function toggleFlip() {
@@ -170,118 +152,66 @@ function toggleFlip() {
 }
 
 function switchCamera() {
-  facingMode = facingMode === "user" ? "environment" : "user";
-  video.remove();
+  stopVideo();
   isVideoLoaded = false; 
-  setupCamera();
+  facingMode = facingMode === "user" ? "environment" : "user";
+  
+  setTimeout(() => {
+    setupCamera();
+  }, 200); 
 }
 
 function updateModelInput() {
-  const selectedModelKey = modelSelect.value();
-  modelInput.value(selectedModelKey || "");
-}
-
-async function connectBluetooth() {
-  try {
-    console.log("Requesting Bluetooth Device...");
-    bluetoothDevice = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: "ESP" }],
-      optionalServices: [UART_SERVICE_UUID]
-    });
-
-    console.log("Connecting to GATT Server...");
-    const server = await bluetoothDevice.gatt.connect();
-
-    console.log("Getting UART Service...");
-    const service = await server.getPrimaryService(UART_SERVICE_UUID);
-
-    console.log("Getting RX Characteristic...");
-    rxCharacteristic = await service.getCharacteristic(UART_RX_CHARACTERISTIC_UUID);
-
-    console.log("Getting TX Characteristic...");
-    txCharacteristic = await service.getCharacteristic(UART_TX_CHARACTERISTIC_UUID);
-
-    txCharacteristic.startNotifications();
-    txCharacteristic.addEventListener("characteristicvaluechanged", handleReceivedData);
-
-    isConnected = true;
-    bluetoothStatus = "Connected to " + bluetoothDevice.name;
-  } catch (error) {
-    console.error("Bluetooth connection failed:", error);
-    bluetoothStatus = "Connection Failed";
-  }
-  updateBluetoothStatus();
-}
-
-function disconnectBluetooth() {
-  if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-    bluetoothDevice.gatt.disconnect();
-    isConnected = false;
-    bluetoothStatus = "Disconnected";
-    rxCharacteristic = null;
-    txCharacteristic = null;
-    bluetoothDevice = null;
-  } else {
-    bluetoothStatus = "Already Disconnected";
-  }
-  updateBluetoothStatus();
-}
-
-function updateBluetoothStatus() {
-  const statusElement = select('#bluetoothStatus');
-  statusElement.html(`상태: ${bluetoothStatus}`);
-  if (isConnected) {
-    statusElement.style('background-color', '#d0f0fd');
-    statusElement.style('color', '#FE818D');
-  } else {
-    statusElement.style('background-color', '#f9f9f9');
-    statusElement.style('color', '#FE818D');
-  }
-}
-
-function handleReceivedData(event) {
-  const receivedData = new Uint8Array(event.target.value.buffer);
-  const receivedString = new TextDecoder().decode(receivedData);
-  console.log("Received:", receivedString);
-}
-
-async function sendBluetoothData(data) {
-  if (!rxCharacteristic || !isConnected) {
-    console.error("Cannot send data: Device not connected.");
-    return;
-  }
-
-  if (isSendingData) {
-    console.log("Waiting for previous data to be sent...");
-    return;
-  }
-
-  try {
-    isSendingData = true;
-    const encoder = new TextEncoder();
-    const encodedData = encoder.encode(data + "\n");
-    await rxCharacteristic.writeValue(encodedData);
-    console.log("Sent:", data);
-  } catch (error) {
-    console.error("Error sending data:", error);
-  } finally {
-    isSendingData = false;
-  }
+  const selectedModelURL = modelSelect.value();
+  modelInput.value(selectedModelURL || "");
 }
 
 function initializeModel() {
-  const modelKey = modelInput.value().trim();
-  if (!modelKey) {
-    alert('모델 키를 입력하세요!');
+  let inputVal = modelInput.value().trim();
+  let finalModelURL = "";
+  
+  if (!inputVal) {
+    alert('모델 주소 또는 ID를 입력하세요!');
     return;
   }
-  const modelURL = `https://teachablemachine.withgoogle.com/models/${modelKey}/model.json`;
-  classifier = ml5.imageClassifier(modelURL, modelLoaded);
+
+  if (inputVal.startsWith('http')) {
+      finalModelURL = inputVal;
+  } else {
+      finalModelURL = "https://teachablemachine.withgoogle.com/models/" + inputVal + "/";
+  }
+
+  if (!finalModelURL.endsWith('model.json')) {
+      if (!finalModelURL.endsWith('/')) {
+          finalModelURL += '/';
+      }
+      finalModelURL += 'model.json';
+  }
+
+  if (modelStatusDiv) {
+      modelStatusDiv.html("모델을 불러오는 중입니다...");
+      modelStatusDiv.style("color", "#666");
+      modelStatusDiv.style("background-color", "#F1F3F4");
+  }
+
+  console.log("Loading model from:", finalModelURL);
+
+  try {
+    classifier = ml5.imageClassifier(finalModelURL, modelLoaded);
+  } catch (e) {
+      console.error(e);
+      if (modelStatusDiv) modelStatusDiv.html("모델 로드 실패. 주소나 ID를 확인해주세요.");
+  }
 }
 
 function modelLoaded() {
   console.log('모델 로드 완료');
-  label = "wait";
+  if (modelStatusDiv) {
+      modelStatusDiv.html("모델이 성공적으로 로드되었습니다!");
+      modelStatusDiv.style("color", "#137333");
+      modelStatusDiv.style("background-color", "#E6F4EA");
+  }
+  label = "준비됨";
   startClassification();
 }
 
@@ -296,14 +226,20 @@ function startClassification() {
 
 function stopClassification() {
   isClassifying = false;
-  label = "stop";
-  console.log('모델 분류 정지');
+  label = "중지됨";
   sendBluetoothData("stop");
+  if (modelStatusDiv) {
+      modelStatusDiv.html("모델 분류가 중지되었습니다.");
+      modelStatusDiv.style("color", "#333");
+      modelStatusDiv.style("background-color", "#F1F3F4");
+  }
 }
 
 function classifyVideo() {
   if (!isClassifying) return;
-  classifier.classify(video, gotResults);
+  // [수정] 왜곡 없는 캔버스 화면 자체를 분류 (정확도 향상)
+  // video를 직접 넣으면 원본(4:3)이 들어가서 AI가 찌그러진 상태로 인식할 수 있음
+  classifier.classify(canvas, gotResults);
 }
 
 function gotResults(error, results) {
@@ -313,47 +249,124 @@ function gotResults(error, results) {
   }
   if (results && results.length > 0) {
     label = results[0].label;
-    console.log("Classified Label:", label);
     sendBluetoothData(label);
   }
   classifyVideo();
 }
 
 function draw() {
-  background(220);
+  background(0);
   
-  if (!isVideoLoaded) {
+  if (!isVideoLoaded || video.width === 0) {
     textAlign(CENTER, CENTER);
-    textSize(24);
+    textSize(20);
     fill(255);
     text("카메라 로딩 중...", width / 2, height / 2);
     return;
   }
 
+  // [핵심 수정] 센터 크롭 (Center Crop) 로직
+  // 영상의 가로/세로 중 작은 쪽을 기준으로 1:1 비율을 만듦
+  let vw = video.width;
+  let vh = video.height;
+  let minDim = min(vw, vh); // 정사각형 한 변의 길이
+  
+  // 영상의 정중앙 좌표 계산
+  let sx = (vw - minDim) / 2;
+  let sy = (vh - minDim) / 2;
+
+  push();
   if (isFlipped) {
-    push();
     translate(width, 0);
     scale(-1, 1);
-    image(video, 0, 0, width, height);
-    pop();
-  } else {
-    image(video, 0, 0, width, height);
   }
+  
+  // image(원본, 캔버스x, 캔버스y, 캔버스w, 캔버스h, 원본x, 원본y, 원본w, 원본h)
+  // 원본 영상의 중앙(sx, sy)에서 정사각형(minDim)만큼 잘라내어 캔버스(400x400)에 꽉 차게 그림
+  image(video, 0, 0, width, height, sx, sy, minDim, minDim);
+  pop();
 
-  const boxWidth = width * 0.8;
-  const boxHeight = height * 0.18;
-  const boxX = (width - boxWidth) / 2;
-  const boxY = (height - boxHeight) / 2;
-  fill(50, 50, 50, 180);
+  // 결과 표시 바
+  const boxHeight = 50;
+  fill(0, 0, 0, 180);
   noStroke();
-  rect(boxX, boxY, boxWidth, boxHeight, 15);
-  textSize(height * 0.1);
+  rect(0, height - boxHeight, width, boxHeight);
+  
+  textSize(24);
   textAlign(CENTER, CENTER);
   fill(255);
-  text(label, width / 2, height / 2);
+  text(label, width / 2, height - (boxHeight/2));
 }
 
 function resizeCanvasToFit() {
-  resizeCanvas(400, 300);
-  video.size(400, 300);
+  resizeCanvas(400, 400);
+}
+
+/* --- Bluetooth Logic --- */
+
+async function connectBluetooth() {
+  try {
+    bluetoothDevice = await navigator.bluetooth.requestDevice({
+      // 기기 이름 필터 수정됨
+      filters: [{ namePrefix: "ESP32_TM" }],
+      optionalServices: [UART_SERVICE_UUID]
+    });
+
+    const server = await bluetoothDevice.gatt.connect();
+    const service = await server.getPrimaryService(UART_SERVICE_UUID);
+    rxCharacteristic = await service.getCharacteristic(UART_RX_CHARACTERISTIC_UUID);
+    txCharacteristic = await service.getCharacteristic(UART_TX_CHARACTERISTIC_UUID);
+
+    isConnected = true;
+    bluetoothStatus = "연결됨: " + bluetoothDevice.name;
+    updateBluetoothStatusUI(true);
+    
+  } catch (error) {
+    console.error("Bluetooth connection failed:", error);
+    bluetoothStatus = "연결 실패";
+    updateBluetoothStatusUI(false, true);
+  }
+}
+
+function disconnectBluetooth() {
+  if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+    bluetoothDevice.gatt.disconnect();
+  }
+  isConnected = false;
+  bluetoothStatus = "연결 해제됨";
+  rxCharacteristic = null;
+  txCharacteristic = null;
+  bluetoothDevice = null;
+  updateBluetoothStatusUI(false);
+}
+
+function updateBluetoothStatusUI(connected = false, error = false) {
+  const statusElement = select('#bluetoothStatus');
+  if(statusElement) {
+      statusElement.html(`상태: ${bluetoothStatus}`);
+      statusElement.removeClass('status-connected');
+      statusElement.removeClass('status-error');
+      
+      if (connected) {
+        statusElement.addClass('status-connected');
+      } else if (error) {
+        statusElement.addClass('status-error');
+      }
+  }
+}
+
+async function sendBluetoothData(data) {
+  if (!rxCharacteristic || !isConnected) return;
+  if (isSendingData) return;
+
+  try {
+    isSendingData = true;
+    const encoder = new TextEncoder();
+    // ESP32 수신부에서 \n을 기준으로 처리하도록 기존 로직 유지
+    await rxCharacteristic.writeValue(encoder.encode(data + "\n"));
+  } catch (error) {
+    console.error("Error sending data:", error);
+  } finally {
+    isSendingData = false;
+  }
 }
