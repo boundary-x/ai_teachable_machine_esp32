@@ -5,8 +5,8 @@
 
 // Bluetooth UUIDs
 const UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-const UART_TX_CHARACTERISTIC_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-const UART_RX_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+const UART_TX_CHARACTERISTIC_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // 쓰기 전용 (웹 -> ESP32)
+const UART_RX_CHARACTERISTIC_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // 읽기 전용
 
 let bluetoothDevice = null;
 let rxCharacteristic = null;
@@ -237,8 +237,6 @@ function stopClassification() {
 
 function classifyVideo() {
   if (!isClassifying) return;
-  // [수정] 왜곡 없는 캔버스 화면 자체를 분류 (정확도 향상)
-  // video를 직접 넣으면 원본(4:3)이 들어가서 AI가 찌그러진 상태로 인식할 수 있음
   classifier.classify(canvas, gotResults);
 }
 
@@ -265,13 +263,10 @@ function draw() {
     return;
   }
 
-  // [핵심 수정] 센터 크롭 (Center Crop) 로직
-  // 영상의 가로/세로 중 작은 쪽을 기준으로 1:1 비율을 만듦
   let vw = video.width;
   let vh = video.height;
-  let minDim = min(vw, vh); // 정사각형 한 변의 길이
+  let minDim = min(vw, vh); 
   
-  // 영상의 정중앙 좌표 계산
   let sx = (vw - minDim) / 2;
   let sy = (vh - minDim) / 2;
 
@@ -281,12 +276,9 @@ function draw() {
     scale(-1, 1);
   }
   
-  // image(원본, 캔버스x, 캔버스y, 캔버스w, 캔버스h, 원본x, 원본y, 원본w, 원본h)
-  // 원본 영상의 중앙(sx, sy)에서 정사각형(minDim)만큼 잘라내어 캔버스(400x400)에 꽉 차게 그림
   image(video, 0, 0, width, height, sx, sy, minDim, minDim);
   pop();
 
-  // 결과 표시 바
   const boxHeight = 50;
   fill(0, 0, 0, 180);
   noStroke();
@@ -307,8 +299,8 @@ function resizeCanvasToFit() {
 async function connectBluetooth() {
   try {
     bluetoothDevice = await navigator.bluetooth.requestDevice({
-      // 기기 이름 필터 수정됨
-      filters: [{ namePrefix: "ESP32" }],
+      // 이전 요청사항을 반영하여 범용적인 'ESP' 필터로 맞췄습니다.
+      filters: [{ namePrefix: "ESP" }],
       optionalServices: [UART_SERVICE_UUID]
     });
 
@@ -356,14 +348,15 @@ function updateBluetoothStatusUI(connected = false, error = false) {
 }
 
 async function sendBluetoothData(data) {
-  if (!rxCharacteristic || !isConnected) return;
+  // [수정 핵심 포인트] txCharacteristic 여부를 체크합니다.
+  if (!txCharacteristic || !isConnected) return;
   if (isSendingData) return;
 
   try {
     isSendingData = true;
     const encoder = new TextEncoder();
-    // ESP32 수신부에서 \n을 기준으로 처리하도록 기존 로직 유지
-    await rxCharacteristic.writeValue(encoder.encode(data + "\n"));
+    // [수정 핵심 포인트] rxCharacteristic이 아닌 txCharacteristic에 데이터를 씁니다.
+    await txCharacteristic.writeValue(encoder.encode(data + "\n"));
   } catch (error) {
     console.error("Error sending data:", error);
   } finally {
